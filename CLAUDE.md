@@ -178,6 +178,50 @@ QwenImageTool/
 - **Accelerate library**: Enables low_cpu_mem_usage for efficient model loading
 - **Latest diffusers**: Need development version from Git for Qwen-Image support
 
+## Advanced Lessons Learned (Latest Session)
+
+### **CRITICAL: Windows Page File Configuration**
+**Issue**: Model loading crashes at "Loading checkpoint shards: 6/9" with process termination
+**Root Cause**: Windows virtual memory insufficient for large model shard loading (even with 32GB RAM)
+**Solution**: Increase Windows page file to 50GB via `sysdm.cpl` → Advanced → Performance → Virtual Memory
+**Impact**: Without this fix, model loading will fail regardless of available physical RAM
+
+### **Complete CPU-Only Implementation Required**
+**Issue**: CUDA Out of Memory errors persist even with CPU offloading methods
+**Root Cause**: `enable_sequential_cpu_offload()` and `enable_model_cpu_offload()` still attempt CUDA operations internally
+**Solution**: Complete elimination of all GPU operations:
+- Force `device="cpu"` and `torch_dtype=torch.float32`
+- Never call `.to("cuda")` or any CPU offloading methods
+- Use only CPU-safe optimizations like `enable_attention_slicing()`
+
+### **Meta Tensor Error Resolution**
+**Issue**: "Cannot copy out of meta tensor; no data!" NotImplementedError during generation
+**Root Cause**: Mixed GPU/CPU operations create meta tensors without materialized data
+**Solution**: Pure CPU-only pipeline with CPU-only generator: `torch.Generator(device="cpu")`
+
+### **Safetensors Corruption Handling**
+**Issue**: Model files become corrupted during interrupted downloads or loading failures
+**Implementation**: 
+- Auto-detect corruption patterns ("safetensors", "shard", "killed", "memory")
+- Automatic cache clearing and re-download on detected corruption
+- Manual "Clear Cache & Re-download" button for user recovery
+- Resume interrupted downloads with `resume_download=True`
+
+### **Memory Requirements & Monitoring**
+**Findings**: 
+- Model requires ~20GB RAM during loading (not just final model size)
+- Windows needs additional virtual memory buffer during shard loading
+- Real-time RAM monitoring essential for troubleshooting
+- Process can be killed by system without error messages if insufficient virtual memory
+
+### **Enhanced Error Categorization**
+**Implementation**: Specific error detection and user-friendly messages:
+- CUDA OOM errors → Suggest application restart
+- Network/timeout errors → Check internet connection  
+- Disk space errors → Request more storage space
+- Permission errors → Suggest administrator mode
+- Corruption errors → Trigger automatic cache clearing
+
 ### Tauri Integration Plan
 For the standalone desktop version:
 1. **Tauri setup**: Initialize Tauri project with embedded Python runtime

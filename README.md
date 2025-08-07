@@ -127,17 +127,118 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 - [ ] Advanced prompt templates
 - [ ] Model fine-tuning support
 
+## 📦 Package Versions
+
+### Exact Tested Versions
+The following versions have been tested and work together:
+
+```
+torch==2.7.1
+torchvision==0.22.1
+transformers==4.55.0
+accelerate==1.10.0
+safetensors==0.5.3
+gradio==5.41.1
+psutil==7.0.0
+```
+
+### CUDA Installation (Windows/Linux)
+For GPU support (though CPU-only mode is recommended for this model):
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
 ## 🐛 Troubleshooting
 
-### Common Issues
-- **Import Errors**: Ensure you have the latest diffusers from requirements.txt
-- **Memory Errors**: The app automatically enables CPU offloading for large models
-- **GPU Not Detected**: Install CUDA-enabled PyTorch: `pip install torch --index-url https://download.pytorch.org/whl/cu118`
+### Critical Issues & Solutions
+
+#### **Model Loading Crashes at "Checkpoint Shards 6/9" (MOST COMMON)**
+**Symptoms**: Process exits/crashes during model loading without error message
+**Cause**: Insufficient Windows virtual memory for large model loading
+**Solution**: 
+1. Press `Win + R`, type `sysdm.cpl`, press Enter
+2. Advanced tab → Performance Settings → Advanced → Virtual Memory Change
+3. Uncheck "Automatically manage", select "Custom size"
+4. Set Initial: `50000` MB, Maximum: `50000` MB
+5. Click Set → OK → Restart computer
+**Impact**: **CRITICAL** - Model will not load without this fix
+
+#### **"CUDA Out of Memory" Errors**
+**Symptoms**: CUDA OOM errors despite CPU-only configuration
+**Cause**: Qwen-Image model (~20GB) too large for most GPUs
+**Solution**: Application automatically uses CPU-only mode
+**User Action**: Restart application if error persists
+
+#### **"Cannot copy out of meta tensor" Error**
+**Symptoms**: NotImplementedError during image generation
+**Cause**: Mixed GPU/CPU operations creating invalid tensor states
+**Solution**: Application uses pure CPU-only mode to prevent this
+**User Action**: Restart application, ensure CPU-only mode is active
+
+#### **Model File Corruption**
+**Symptoms**: Loading fails partway through, safetensors errors
+**Cause**: Interrupted downloads, disk issues, or network problems
+**Solution**: Click "🗑️ Clear Cache & Re-download" button
+**Prevention**: Ensure stable internet connection during initial download
+
+#### **Gradio Server Won't Start**
+**Symptoms**: "Unable to configure formatter" errors
+**Cause**: Logging conflicts between custom code and Gradio
+**Solution**: Fixed in current version with proper logging configuration
+**User Action**: Use PowerShell instead of CMD on Windows
+
+### System Requirements
+
+#### **Minimum Requirements**
+- **RAM**: 24GB available RAM (32GB total recommended)
+- **Storage**: 10GB free space (4GB model + 6GB temporary)
+- **CPU**: Multi-core processor (Intel i5/AMD Ryzen 5 or better)
+- **OS**: Windows 10/11 (PowerShell required)
+
+#### **Critical Configuration**
+- **Virtual Memory**: 50GB Windows page file (ESSENTIAL)
+- **Python**: 3.10+ with pip
+- **Network**: Stable connection for initial 4GB download
+
+#### **Performance Notes**
+- **Generation Time**: 5-15 minutes per image on CPU
+- **Loading Time**: 5-10 minutes first run (one-time)
+- **GPU Usage**: Not recommended due to 20GB model size
 
 ### Debug Information
-- Check `console.log` for detailed operation logs
-- Use PowerShell on Windows for better Unicode support
-- Ensure 16GB+ RAM for optimal performance
+- **Logs**: Check `console.log` for detailed operation information
+- **Status**: UI shows real-time model status and error details
+- **Memory**: Application monitors and reports RAM usage
+- **Recovery**: Automatic cache clearing on corruption detection
+
+### Platform-Specific Notes
+
+#### **Windows**
+- **Use PowerShell** (not CMD) for better Unicode support
+- **Page file configuration** is essential for model loading
+- **Antivirus**: May quarantine model files, add exclusion for project folder
+
+#### **Linux**
+- Install packages may require `sudo` permissions
+- Virtual memory configuration varies by distribution
+- Monitor `/tmp` space during model loading
+
+### Common Error Messages
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Process killed at shard 6/9 | Insufficient virtual memory | Increase Windows page file to 50GB |
+| CUDA out of memory | Model too large for GPU | Application auto-uses CPU mode |
+| Safetensors error | Corrupted model files | Use "Clear Cache & Re-download" button |
+| Network timeout | Unstable connection | Retry download, check internet |
+| Permission denied | Folder access issues | Run as administrator or check permissions |
+| Import errors | Missing dependencies | Reinstall with `pip install -r requirements.txt` |
+
+### Performance Optimization
+- **Close other applications** to free RAM during loading
+- **Use SSD storage** if available for faster model loading
+- **Disable antivirus real-time scanning** for project folder temporarily
+- **Increase page file on fastest drive** (usually C:) for better performance
 
 ## 📄 License
 

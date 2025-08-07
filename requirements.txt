@@ -1,5 +1,21 @@
-torch>=2.0.0
+# Core AI/ML packages - exact versions tested and working
+torch==2.7.1
+torchvision==0.22.1
+transformers==4.55.0
+accelerate==1.10.0
+safetensors==0.5.3
+
+# Diffusers - use latest development version for Qwen-Image support
 git+https://github.com/huggingface/diffusers
-gradio>=4.0.0
-accelerate
-Pillow
+
+# UI and utilities
+gradio==5.41.1
+Pillow>=10.0.0
+psutil==7.0.0
+
+# Additional dependencies
+huggingface-hub>=0.20.0
+
+# CUDA-specific PyTorch (install manually if needed)
+# Windows: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# Linux: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
