@@ -73,7 +73,10 @@ npm run tauri build
 - **Resolutions**: Higher resolutions (1328x1328 for 1:1, 1664x928 for 16:9)
 
 ### Model Management
-- **Automatic download**: Downloads Qwen/Qwen-Image from https://huggingface.co/Qwen/Qwen-Image on first run
+- **Model variants**:
+  - FP8 (~20GB): https://huggingface.co/Qwen/Qwen-Image
+  - FP16 (~40GB): https://huggingface.co/Qwen/Qwen-Image-FP16
+- **Automatic download**: Downloads selected variant on first run
 - **Platform-specific caching**: Model files stored in appropriate user cache directories:
   - Windows: `%LOCALAPPDATA%\QwenImage\models`
   - macOS: `~/Library/Application Support/QwenImage/models`
