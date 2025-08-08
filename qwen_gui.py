@@ -10,7 +10,6 @@ import atexit
 import traceback
 import glob
 import psutil
-from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HfHubHTTPError
 
 # Suppress specific Gradio warnings early
@@ -25,7 +24,28 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 MODEL_DIR = Path("model")
 OUTPUT_DIR = Path("output")
 LOG_FILE = Path("console.log")
-MODEL_NAME = "Qwen/Qwen-Image"
+
+# Supported model variants and their Hugging Face repo IDs
+MODEL_VARIANTS = {
+    "FP8 (20GB)": {"id": "Qwen/Qwen-Image", "size_gb": 20},
+    "FP16 (40GB)": {"id": "Qwen/Qwen-Image-FP16", "size_gb": 40},
+}
+
+# Default selection
+selected_variant = "FP8 (20GB)"
+
+
+def set_model_variant(variant: str) -> None:
+    """Update global model configuration based on selected variant."""
+    global selected_variant, MODEL_NAME, MODEL_SIZE_GB
+    selected_variant = variant
+    config = MODEL_VARIANTS[variant]
+    MODEL_NAME = config["id"]
+    MODEL_SIZE_GB = config["size_gb"]
+
+
+# Initialize globals for default variant
+set_model_variant(selected_variant)
 
 # Ensure directories exist
 MODEL_DIR.mkdir(exist_ok=True)
@@ -88,26 +108,28 @@ def get_device_and_dtype():
     # Log system memory info
     memory = psutil.virtual_memory()
     logger.info(f"System RAM: {memory.total / (1024**3):.1f}GB total, {memory.available / (1024**3):.1f}GB available")
-    
+
     if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name(0)
-        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        logger.info(f"CUDA device detected: {device_name}")
-        logger.info(f"GPU VRAM: {vram_gb:.1f}GB available")
-        
-        # For Qwen-Image, force CPU-only due to insufficient VRAM for 20GB model
-        logger.warning(f"Qwen-Image model (~20GB) too large for {vram_gb:.1f}GB VRAM. Using CPU-only mode.")
-        logger.info(f"Forcing CPU-only operation to avoid CUDA OOM errors")
-        return "cpu", torch.float32  # Force CPU-only with float32
+        try:
+            device_name = torch.cuda.get_device_name(0)
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            # Attempt small allocation to ensure CUDA is usable
+            torch.zeros(1, device="cuda")
+            logger.info(f"CUDA device detected: {device_name}")
+            logger.info(f"GPU VRAM: {vram_gb:.1f}GB available")
+            return "cuda", torch.float16
+        except Exception as e:
+            logger.warning(f"CUDA not usable ({e}), falling back to CPU")
     else:
         logger.info("No CUDA device detected, using CPU only")
-        if memory.available < 8 * (1024**3):  # Less than 8GB available
-            logger.warning(f"Low available RAM ({memory.available / (1024**3):.1f}GB). Model loading may be slow or fail.")
-        return "cpu", torch.float32
+
+    if memory.available < 8 * (1024**3):  # Less than 8GB available
+        logger.warning(f"Low available RAM ({memory.available / (1024**3):.1f}GB). Model loading may be slow or fail.")
+    return "cpu", torch.float32
 
 def check_model_files():
     """Check if model files are already downloaded and complete"""
-    cache_dir = MODEL_DIR / "cache" / "models--Qwen--Qwen-Image"
+    cache_dir = MODEL_DIR / "cache" / f"models--{MODEL_NAME.replace('/', '--')}"
     logger.info(f"Checking for model files in: {cache_dir}")
     
     if not cache_dir.exists():
@@ -219,17 +241,15 @@ def load_existing_model():
         # Suppress Python warnings temporarily
         import warnings
         
-        logger.info("Starting DiffusionPipeline.from_pretrained with full CPU offloading...")
-        
+        logger.info("Starting DiffusionPipeline.from_pretrained...")
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             warnings.filterwarnings("ignore", message=".*pooled_projection_dim.*")
-            
-            # Load pipeline directly to CPU - NO CUDA operations
-            logger.info("Loading pipeline in pure CPU mode...")
+
             logger.info(f"Available RAM: {psutil.virtual_memory().available / (1024**3):.1f}GB")
             logger.info("Loading may take several minutes for large model shards...")
-            
+
             pipe = DiffusionPipeline.from_pretrained(
                 MODEL_NAME,
                 torch_dtype=torch_dtype,
@@ -239,30 +259,43 @@ def load_existing_model():
                 use_safetensors=True,
                 resume_download=True  # Resume incomplete downloads
             )
-            
-            # DO NOT use any CPU offloading - it tries to use CUDA
-            # Keep everything on CPU for true CPU-only operation
-            logger.info("Running in pure CPU mode - no GPU offloading")
-            
-            # Enable memory efficient attention if available (CPU-safe)
+
             try:
                 pipe.enable_attention_slicing()
-                logger.info("Enabled attention slicing for CPU memory savings")
+                logger.info("Enabled attention slicing")
             except Exception as e:
                 logger.info(f"Attention slicing not available: {e}")
-            
-            # NO GPU operations - avoid all CUDA calls
-            logger.info("Skipping all GPU operations for pure CPU mode")
-        
+
+            if device == "cuda":
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                offload_dir = MODEL_DIR / "offload"
+                offload_dir.mkdir(exist_ok=True)
+                try:
+                    if vram_gb >= MODEL_SIZE_GB:
+                        pipe.to("cuda")
+                        logger.info("Loaded model fully into GPU memory")
+                        mode_msg = "GPU"
+                    else:
+                        pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                        logger.info("Enabled model CPU offload due to limited VRAM")
+                        mode_msg = "GPU with CPU offload"
+                except RuntimeError as e:
+                    logger.warning(f"GPU load failed ({e}), falling back to CPU offload")
+                    pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                    mode_msg = "GPU with CPU offload"
+            else:
+                pipe.to("cpu")
+                mode_msg = "CPU"
+
         logger.info("DiffusionPipeline loaded successfully")
-        
+
         # Restore logging levels
         transformers.logging.set_verbosity(old_transformers_level)
         logging.getLogger('diffusers').setLevel(old_diffusers_level)
-        
+
         model_loaded = True
-        logger.info(f"Model loaded successfully in pure CPU mode")
-        return f"✅ Model loaded from cache using CPU-only mode (no CUDA)"
+        logger.info(f"Model loaded successfully on {mode_msg}")
+        return f"✅ Model loaded from cache using {mode_msg}"
         
     except Exception as e:
         error_msg = f"Failed to load existing model: {str(e)}"
@@ -279,17 +312,18 @@ def load_existing_model():
         elif "safetensors" in str(e).lower() or "shard" in str(e).lower():
             return f"❌ Model file corruption detected. Please click 'Download & Load Model' to re-download."
         elif "memory" in str(e).lower() or "ram" in str(e).lower():
-            return f"❌ Insufficient RAM. Need ~20GB available RAM for model loading. Close other applications and try again."
+            return f"❌ Insufficient RAM. Need ~{MODEL_SIZE_GB}GB available RAM for model loading. Close other applications and try again."
         elif "killed" in str(e).lower() or "terminated" in str(e).lower():
             return f"❌ Process killed during loading - likely out of memory. Restart application and close other programs."
         else:
             return f"❌ Model loading error: {str(e)[:200]}..."
 
-def download_model(progress=gr.Progress()):
+def download_model(model_variant, progress=gr.Progress()):
     """Download and initialize the Qwen-Image model"""
     global pipe, model_loaded
-    
-    logger.info("Starting model download/load process...")
+
+    set_model_variant(model_variant)
+    logger.info(f"Starting model download/load process for {MODEL_NAME}...")
     
     if progress:
         progress(0, desc="Initializing...")
@@ -310,7 +344,7 @@ def download_model(progress=gr.Progress()):
             logger.warning("Failed to load from cache, will clear cache and re-download")
             # Clear potentially corrupted cache
             try:
-                cache_dir = MODEL_DIR / "cache" / "models--Qwen--Qwen-Image"
+                cache_dir = MODEL_DIR / "cache" / f"models--{MODEL_NAME.replace('/', '--')}"
                 if cache_dir.exists():
                     import shutil
                     shutil.rmtree(cache_dir)
@@ -328,9 +362,9 @@ def download_model(progress=gr.Progress()):
         # Download to custom cache directory
         cache_dir = MODEL_DIR / "cache"
         logger.info(f"Cache directory: {cache_dir}")
-        
+
         if progress:
-            progress(0.1, desc="Downloading Qwen-Image model (~4GB)...")
+            progress(0.1, desc=f"Downloading {MODEL_NAME} model...")
         
         logger.info(f"Downloading {MODEL_NAME} with torch_dtype={torch_dtype}")
         
@@ -357,14 +391,12 @@ def download_model(progress=gr.Progress()):
             
             if progress:
                 progress(0.3, desc="Downloading model files...")
-            
-            # Download model files directly to CPU - NO CUDA operations
-            logger.info("Downloading pipeline in pure CPU mode...")
+
             logger.info(f"Available RAM: {psutil.virtual_memory().available / (1024**3):.1f}GB")
             logger.info("Download may take 10-30 minutes depending on connection...")
-            
+
             pipe = DiffusionPipeline.from_pretrained(
-                MODEL_NAME, 
+                MODEL_NAME,
                 torch_dtype=torch_dtype,
                 cache_dir=str(cache_dir),
                 low_cpu_mem_usage=True,
@@ -372,23 +404,36 @@ def download_model(progress=gr.Progress()):
                 resume_download=True,  # Resume interrupted downloads
                 force_download=False   # Use cached files if available and valid
             )
-            
+
             if progress:
-                progress(0.7, desc="Setting up CPU-only mode...")
-            
-            # DO NOT use any CPU offloading - it tries to use CUDA
-            # Keep everything on CPU for true CPU-only operation
-            logger.info("Running in pure CPU mode - no GPU offloading")
-            
-            # Enable memory efficient attention if available (CPU-safe)
+                progress(0.7, desc="Setting up device...")
+
             try:
                 pipe.enable_attention_slicing()
-                logger.info("Enabled attention slicing for CPU memory savings")
+                logger.info("Enabled attention slicing")
             except Exception as e:
                 logger.info(f"Attention slicing not available: {e}")
-            
-            # NO GPU operations - avoid all CUDA calls
-            logger.info("Skipping all GPU operations for pure CPU mode")
+
+            if device == "cuda":
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                offload_dir = MODEL_DIR / "offload"
+                offload_dir.mkdir(exist_ok=True)
+                try:
+                    if vram_gb >= MODEL_SIZE_GB:
+                        pipe.to("cuda")
+                        logger.info("Loaded model fully into GPU memory")
+                        mode_msg = "GPU"
+                    else:
+                        pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                        logger.info("Enabled model CPU offload due to limited VRAM")
+                        mode_msg = "GPU with CPU offload"
+                except RuntimeError as e:
+                    logger.warning(f"GPU load failed ({e}), falling back to CPU offload")
+                    pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                    mode_msg = "GPU with CPU offload"
+            else:
+                pipe.to("cpu")
+                mode_msg = "CPU"
         
         # Restore logging levels
         transformers.logging.set_verbosity(old_transformers_level)
@@ -396,11 +441,11 @@ def download_model(progress=gr.Progress()):
         
         logger.info("Model files downloaded and loaded successfully")
         model_loaded = True
-        
+
         if progress:
             progress(1.0, desc="Model ready!")
-        
-        result = f"✅ Model downloaded and loaded using CPU-only mode (no CUDA)"
+
+        result = f"✅ Model downloaded and loaded using {mode_msg}"
         logger.info(result)
         return result
         
@@ -472,14 +517,12 @@ def generate_image(prompt, negative_prompt, aspect_ratio, steps, cfg_scale, seed
         logger.info(f"Negative prompt: '{neg_prompt[:100]}...'")
         logger.info(f"Steps: {steps}, CFG Scale: {cfg_scale}")
         
-        # Force CPU device for generator - no CUDA
-        device = "cpu"  # Always use CPU for generator to avoid CUDA OOM
-        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
         if progress:
-            progress(0.2, desc="Generating image (CPU-only)...")
-        
-        logger.info("Starting diffusion process in CPU-only mode...")
-        # Generate image using CPU-only generator
+            progress(0.2, desc=f"Generating image ({device.upper()})...")
+
+        logger.info(f"Starting diffusion process on {device.upper()}...")
         image = pipe(
             prompt=enhanced_prompt,
             negative_prompt=neg_prompt,
@@ -487,7 +530,7 @@ def generate_image(prompt, negative_prompt, aspect_ratio, steps, cfg_scale, seed
             height=height,
             num_inference_steps=steps,
             true_cfg_scale=cfg_scale,
-            generator=torch.Generator(device="cpu").manual_seed(seed)  # Force CPU generator
+            generator=torch.Generator(device=device).manual_seed(seed)
         ).images[0]
         
         logger.info("Image generation completed")
@@ -516,16 +559,17 @@ def generate_image(prompt, negative_prompt, aspect_ratio, steps, cfg_scale, seed
         logger.error(f"Exception type: {type(e).__name__}")
         return None, error_msg
 
-def clear_cache_and_redownload():
-    """Clear model cache and force fresh download"""
+def clear_cache_and_redownload(model_variant):
+    """Clear model cache for the selected variant"""
     global pipe, model_loaded
-    
+
+    set_model_variant(model_variant)
     logger.info("Manual cache clear requested")
     pipe = None
     model_loaded = False
-    
+
     try:
-        cache_dir = MODEL_DIR / "cache" / "models--Qwen--Qwen-Image"
+        cache_dir = MODEL_DIR / "cache" / f"models--{MODEL_NAME.replace('/', '--')}"
         if cache_dir.exists():
             import shutil
             logger.info(f"Removing cache directory: {cache_dir}")
@@ -539,10 +583,12 @@ def clear_cache_and_redownload():
         logger.error(error_msg)
         return error_msg
 
-def check_startup_status():
-    """Check model status on startup"""
+
+def check_startup_status(model_variant):
+    """Check model status on startup for the selected variant"""
+    set_model_variant(model_variant)
     model_status = check_model_files()
-    
+
     if model_status["found"]:
         logger.info("Model files detected on startup")
         result = load_existing_model()
@@ -554,7 +600,7 @@ def check_startup_status():
     else:
         # No model found or incomplete
         details = f" - {model_status['details']}" if model_status['details'] else ""
-        return f"📥 {model_status['message']}{details}\nClick 'Download & Load Model' to download Qwen-Image model (~4GB)"
+        return f"📥 {model_status['message']}{details}\nClick 'Download & Load Model' to download {MODEL_NAME} (~{MODEL_SIZE_GB}GB)"
 
 # Create Gradio interface
 with gr.Blocks(title="Qwen-Image GUI", theme=gr.themes.Soft()) as interface:
@@ -567,14 +613,20 @@ with gr.Blocks(title="Qwen-Image GUI", theme=gr.themes.Soft()) as interface:
             # Model Management
             with gr.Group():
                 gr.Markdown("### 📦 Model Management")
+                model_variant = gr.Dropdown(
+                    label="Model Variant",
+                    choices=list(MODEL_VARIANTS.keys()),
+                    value=selected_variant,
+                )
+
                 download_btn = gr.Button("Download & Load Model", variant="primary", size="lg")
-                
+
                 with gr.Row():
                     clear_cache_btn = gr.Button("🗑️ Clear Cache & Re-download", variant="secondary", size="sm")
-                    
+
                 model_status = gr.Textbox(
-                    label="Status", 
-                    value=check_startup_status(), 
+                    label="Status",
+                    value=check_startup_status(selected_variant),
                     interactive=False,
                     lines=3
                 )
@@ -650,14 +702,22 @@ with gr.Blocks(title="Qwen-Image GUI", theme=gr.themes.Soft()) as interface:
     # Event handlers
     download_btn.click(
         fn=download_model,
+        inputs=[model_variant],
         outputs=[model_status],
         show_progress=True
     )
-    
+
     clear_cache_btn.click(
         fn=clear_cache_and_redownload,
+        inputs=[model_variant],
         outputs=[model_status],
         show_progress=False
+    )
+
+    model_variant.change(
+        fn=check_startup_status,
+        inputs=[model_variant],
+        outputs=[model_status]
     )
     
     generate_btn.click(

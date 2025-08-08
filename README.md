@@ -52,6 +52,15 @@ python qwen_gui.py
 
 5. **First run**: Click "Download & Load Model" (one-time ~4GB download)
 
+## 📦 Model Variants
+
+Two versions of the Qwen-Image model are available:
+
+- **FP8 (~20GB)** – https://huggingface.co/Qwen/Qwen-Image
+- **FP16 (~40GB)** – https://huggingface.co/Qwen/Qwen-Image-FP16
+
+Select the desired variant in the application before downloading.
+
 ## 🧠 Advanced Memory Management
 
 ### Automatic Optimization
