@@ -17,8 +17,9 @@ A cross-platform desktop application providing a user-friendly GUI for Alibaba's
 ## 🖼️ Generated Image Quality
 
 The Qwen-Image model produces high-quality images with:
-- **High Resolutions**: Up to 1664x928 (16:9) and 1328x1328 (1:1)
-- **Multiple Aspect Ratios**: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3
+- **High Resolutions**: Up to 2048×2048 (1:1) and 2048×1152 (16:9) maximum quality
+- **Intuitive UI**: Separate aspect ratio and resolution selection with live preview
+- **Multiple Aspect Ratios**: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3 with 4 quality levels each
 - **Advanced Controls**: CFG scale, negative prompts, custom seeds
 - **Professional Quality**: 4K, ultra HD, cinematic composition enhancement
 
@@ -112,9 +113,11 @@ qwen-image-generator/
 ## 🔧 Configuration
 
 ### Environment Variables
-The application sets optimal CUDA configurations automatically:
+The application sets optimal configurations automatically:
 ```python
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+# Gradio analytics disabled for privacy
+os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
+# Note: CUDA expandable_segments removed for platform compatibility
 ```
 
 ### Model Storage

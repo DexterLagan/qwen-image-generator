@@ -225,6 +225,43 @@ QwenImageTool/
 - Permission errors → Suggest administrator mode
 - Corruption errors → Trigger automatic cache clearing
 
+## Latest UI and Platform Improvements
+
+### **CUDA Platform Compatibility Fix**
+**Issue**: `expandable_segments not supported on this platform` warning during model loading on Windows
+**Root Cause**: PyTorch CUDA memory configuration not supported on all platforms
+**Solution**: Removed `PYTORCH_CUDA_ALLOC_CONF = 'expandable_segments:True'` environment variable
+**Impact**: Clean console output without platform-specific warnings
+
+### **Improved Resolution UI System**
+**Issue**: Combined "Resolution & Aspect Ratio" dropdown was confusing and didn't clearly show resolution options
+**Implementation**: Split into intuitive two-dropdown system:
+
+**New UI Structure**:
+1. **Aspect Ratio Dropdown**: Clean list of ratios (1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3)
+2. **Resolution Dropdown**: Dynamic options based on selected aspect ratio (Small, Medium, Large, Max)
+3. **Resolution Display**: Read-only field showing actual pixels (e.g., "512 × 512 pixels")
+
+**Dynamic Functionality**:
+- Aspect ratio selection automatically updates available resolutions
+- Resolution selection updates the pixel display in real-time
+- All 28 resolution combinations preserved from previous system
+
+**Resolution Matrix Maintained**:
+- **1:1 Square**: 512², 1024², 1328² (Qwen default), 2048²
+- **16:9 Landscape**: 512×288, 1024×576, 1664×928, 2048×1152
+- **9:16 Portrait**: 288×512, 576×1024, 928×1664, 1152×2048
+- **4:3 Classic**: 512×384, 1024×768, 1472×1140, 2048×1536
+- **3:4 Portrait**: 384×512, 768×1024, 1140×1472, 1536×2048
+- **3:2 Photo**: 512×342, 1024×682, 1584×1056, 2048×1366
+- **2:3 Portrait**: 342×512, 682×1024, 1056×1584, 1366×2048
+
+**User Experience Benefits**:
+- Clear separation of concerns (aspect ratio vs resolution)
+- Immediate visual feedback of output dimensions
+- Intuitive workflow: choose shape first, then quality level
+- Prevents confusion between aspect ratio and pixel dimensions
+
 ### Tauri Integration Plan
 For the standalone desktop version:
 1. **Tauri setup**: Initialize Tauri project with embedded Python runtime

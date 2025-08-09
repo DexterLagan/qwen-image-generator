@@ -17,8 +17,8 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="gradio")
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 
-# Set CUDA memory optimization environment variables
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+# Note: expandable_segments removed to avoid platform compatibility warnings
+# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 # Configure paths
 MODEL_DIR = Path("model")
@@ -276,12 +276,12 @@ def load_existing_model():
                         logger.info("Loaded model fully into GPU memory")
                         mode_msg = "GPU"
                     else:
-                        pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                        pipe.enable_model_cpu_offload()
                         logger.info("Enabled model CPU offload due to limited VRAM")
                         mode_msg = "GPU with CPU offload"
                 except RuntimeError as e:
                     logger.warning(f"GPU load failed ({e}), falling back to CPU offload")
-                    pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                    pipe.enable_model_cpu_offload()
                     mode_msg = "GPU with CPU offload"
             else:
                 pipe.to("cpu")
@@ -424,12 +424,12 @@ def download_model(model_variant, progress=gr.Progress()):
                         logger.info("Loaded model fully into GPU memory")
                         mode_msg = "GPU"
                     else:
-                        pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                        pipe.enable_model_cpu_offload()
                         logger.info("Enabled model CPU offload due to limited VRAM")
                         mode_msg = "GPU with CPU offload"
                 except RuntimeError as e:
                     logger.warning(f"GPU load failed ({e}), falling back to CPU offload")
-                    pipe.enable_model_cpu_offload(offload_dir=str(offload_dir))
+                    pipe.enable_model_cpu_offload()
                     mode_msg = "GPU with CPU offload"
             else:
                 pipe.to("cpu")
@@ -466,7 +466,7 @@ def download_model(model_variant, progress=gr.Progress()):
         else:
             return f"❌ Download error: {str(e)[:200]}..."
 
-def generate_image(prompt, negative_prompt, aspect_ratio, steps, cfg_scale, seed, randomize_seed, progress=gr.Progress()):
+def generate_image(prompt, negative_prompt, aspect_ratio, resolution, steps, cfg_scale, seed, randomize_seed, progress=gr.Progress()):
     """Generate image using Qwen-Image model"""
     global pipe, model_loaded
     
@@ -494,18 +494,53 @@ def generate_image(prompt, negative_prompt, aspect_ratio, steps, cfg_scale, seed
         else:
             logger.info(f"Using fixed seed: {seed}")
         
-        # Aspect ratio mappings from official sample
-        aspect_ratios = {
-            "1:1 (Square)": (1328, 1328),
-            "16:9 (Landscape)": (1664, 928),
-            "9:16 (Portrait)": (928, 1664),
-            "4:3 (Classic)": (1472, 1140),
-            "3:4 (Portrait)": (1140, 1472),
-            "3:2 (Photo)": (1584, 1056),
-            "2:3 (Portrait)": (1056, 1584),
+        # Resolution mappings organized by aspect ratio
+        resolution_data = {
+            "1:1 (Square)": {
+                "Small (512×512)": (512, 512),
+                "Medium (1024×1024)": (1024, 1024),
+                "Large (1328×1328)": (1328, 1328),
+                "Max (2048×2048)": (2048, 2048),
+            },
+            "16:9 (Landscape)": {
+                "Small (512×288)": (512, 288),
+                "Medium (1024×576)": (1024, 576),
+                "Large (1664×928)": (1664, 928),
+                "Max (2048×1152)": (2048, 1152),
+            },
+            "9:16 (Portrait)": {
+                "Small (288×512)": (288, 512),
+                "Medium (576×1024)": (576, 1024),
+                "Large (928×1664)": (928, 1664),
+                "Max (1152×2048)": (1152, 2048),
+            },
+            "4:3 (Classic)": {
+                "Small (512×384)": (512, 384),
+                "Medium (1024×768)": (1024, 768),
+                "Large (1472×1140)": (1472, 1140),
+                "Max (2048×1536)": (2048, 1536),
+            },
+            "3:4 (Portrait)": {
+                "Small (384×512)": (384, 512),
+                "Medium (768×1024)": (768, 1024),
+                "Large (1140×1472)": (1140, 1472),
+                "Max (1536×2048)": (1536, 2048),
+            },
+            "3:2 (Photo)": {
+                "Small (512×342)": (512, 342),
+                "Medium (1024×682)": (1024, 682),
+                "Large (1584×1056)": (1584, 1056),
+                "Max (2048×1366)": (2048, 1366),
+            },
+            "2:3 (Portrait)": {
+                "Small (342×512)": (342, 512),
+                "Medium (682×1024)": (682, 1024),
+                "Large (1056×1584)": (1056, 1584),
+                "Max (1366×2048)": (1366, 2048),
+            }
         }
         
-        width, height = aspect_ratios[aspect_ratio]
+        width, height = resolution_data[aspect_ratio][resolution]
         logger.info(f"Using resolution: {width}x{height} ({aspect_ratio})")
         
         # Add positive magic from official sample for better results
@@ -661,6 +696,25 @@ with gr.Blocks(title="Qwen-Image GUI", theme=gr.themes.Soft()) as interface:
                     value="1:1 (Square)"
                 )
                 
+                resolution = gr.Dropdown(
+                    label="Resolution",
+                    choices=[
+                        "Small (512×512)",
+                        "Medium (1024×1024)",
+                        "Large (1328×1328)",
+                        "Max (2048×2048)"
+                    ],
+                    value="Small (512×512)"
+                )
+                
+                # Resolution display field
+                resolution_display = gr.Textbox(
+                    label="Output Resolution",
+                    value="512 × 512 pixels",
+                    interactive=False,
+                    max_lines=1
+                )
+                
                 with gr.Row():
                     steps = gr.Slider(
                         label="Steps",
@@ -699,6 +753,66 @@ with gr.Blocks(title="Qwen-Image GUI", theme=gr.themes.Soft()) as interface:
                 output_image = gr.Image(label="Result", show_download_button=True)
                 generation_info = gr.Textbox(label="Generation Info", lines=4, interactive=False)
     
+    def update_resolution_choices(aspect_ratio_choice):
+        """Update resolution choices based on selected aspect ratio"""
+        resolution_data = {
+            "1:1 (Square)": [
+                "Small (512×512)",
+                "Medium (1024×1024)",
+                "Large (1328×1328)",
+                "Max (2048×2048)"
+            ],
+            "16:9 (Landscape)": [
+                "Small (512×288)",
+                "Medium (1024×576)",
+                "Large (1664×928)",
+                "Max (2048×1152)"
+            ],
+            "9:16 (Portrait)": [
+                "Small (288×512)",
+                "Medium (576×1024)",
+                "Large (928×1664)",
+                "Max (1152×2048)"
+            ],
+            "4:3 (Classic)": [
+                "Small (512×384)",
+                "Medium (1024×768)",
+                "Large (1472×1140)",
+                "Max (2048×1536)"
+            ],
+            "3:4 (Portrait)": [
+                "Small (384×512)",
+                "Medium (768×1024)",
+                "Large (1140×1472)",
+                "Max (1536×2048)"
+            ],
+            "3:2 (Photo)": [
+                "Small (512×342)",
+                "Medium (1024×682)",
+                "Large (1584×1056)",
+                "Max (2048×1366)"
+            ],
+            "2:3 (Portrait)": [
+                "Small (342×512)",
+                "Medium (682×1024)",
+                "Large (1056×1584)",
+                "Max (1366×2048)"
+            ]
+        }
+        
+        choices = resolution_data.get(aspect_ratio_choice, ["Small (512×512)"])
+        default_value = choices[0]  # First option as default
+        return gr.update(choices=choices, value=default_value)
+    
+    def update_resolution_display(resolution_choice):
+        """Extract and display resolution from resolution choice"""
+        # Extract resolution from choice like "Small (512×512)"
+        if "(" in resolution_choice and "×" in resolution_choice:
+            resolution_part = resolution_choice.split("(")[1].split(")")[0]
+            width, height = resolution_part.split("×")
+            return f"{width} × {height} pixels"
+        return "Resolution not available"
+    
     # Event handlers
     download_btn.click(
         fn=download_model,
@@ -722,9 +836,23 @@ with gr.Blocks(title="Qwen-Image GUI", theme=gr.themes.Soft()) as interface:
     
     generate_btn.click(
         fn=generate_image,
-        inputs=[prompt, negative_prompt, aspect_ratio, steps, cfg_scale, seed, randomize_seed],
+        inputs=[prompt, negative_prompt, aspect_ratio, resolution, steps, cfg_scale, seed, randomize_seed],
         outputs=[output_image, generation_info],
         show_progress=True
+    )
+    
+    # Update resolution choices when aspect ratio changes
+    aspect_ratio.change(
+        fn=update_resolution_choices,
+        inputs=[aspect_ratio],
+        outputs=[resolution]
+    )
+    
+    # Update resolution display when resolution changes
+    resolution.change(
+        fn=update_resolution_display,
+        inputs=[resolution],
+        outputs=[resolution_display]
     )
 
 if __name__ == "__main__":
